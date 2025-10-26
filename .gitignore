@@ -222,15 +222,15 @@ __marimo__/
 *.safetensors
 
 # Large datasets
-data/
-dataset/
-datasets/
+# data/
+# dataset/
+# datasets/
 *.csv
-*.tsv
-*.json
-*.jsonl
-*.parquet
-*.feather
+# *.tsv
+# *.json
+# *.jsonl
+# *.parquet
+# *.feather
 
 # Model outputs and results
 output/
