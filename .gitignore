@@ -205,3 +205,73 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Deep Learning & AI specific
+# Model files and checkpoints
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+*.model
+*.weights
+*.bin
+*.safetensors
+
+# Large datasets
+data/
+dataset/
+datasets/
+*.csv
+*.tsv
+*.json
+*.jsonl
+*.parquet
+*.feather
+
+# Model outputs and results
+output/
+outputs/
+results/
+evaluation_results/
+logs/
+runs/
+wandb/
+tensorboard/
+mlruns/
+
+# Pretrained models and model cache
+modelscope/
+huggingface/
+transformers_cache/
+.cache/
+models/
+pretrained/
+checkpoints/
+
+# LoRA and fine-tuning outputs
+lora_output/
+adapter_model/
+peft_model/
+fine_tuned/
+
+# Jupyter notebook outputs (keep checkpoints ignored)
+*.ipynb_checkpoints/
+
+# Large temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Debug and test files
+debug_*.py
+test_*.py
+*_test.py
+*_debug.py
+
+# GPU/CUDA cache
+.nv/
