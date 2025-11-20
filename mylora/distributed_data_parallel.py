@@ -14,8 +14,8 @@ def main():
     val_json_path = "./data/val_lite.json"
     max_source_length = 128   # todo 输入长度最大可以设置为多少？
     max_target_length = 256   # todo 输出呢？
-    epochs = 10
-    batch_size = 1   # todo 显存大了之后可以增大，如何控制多卡训练
+    epochs = 3
+    batch_size = 4   # todo 显存大了之后可以增大，如何控制多卡训练
     lr = 1e-4
     gradient_accumulation_steps = 16
     lora_rank = 8   # 8或16或32
@@ -59,6 +59,7 @@ def main():
 
     # 开始训练
     print("Start Training...")
+    start_time = time.time()
     train_model(
         model=model,
         train_loader=train_data,
@@ -70,6 +71,10 @@ def main():
         writer=writer,
         accelerator=accelerator
     )
+    end_time = time.time()
+    total_time = end_time - start_time
+    print(f"训练完成！总用时: {total_time:.2f} 秒 ({total_time/60:.2f} 分钟)")
+    accelerator.free_memory()
 
 import time
 import torch

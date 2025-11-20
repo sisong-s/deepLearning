@@ -173,14 +173,14 @@ def query(question, max_turns = 5):
         else:
             return result
 
-# question = """I have 2 dogs, a border collie and a scottish terrier. \
-# What is their combined weight"""
-# query(question)
+question = """I have 2 dogs, a border collie and a scottish terrier. \
+What is their combined weight"""
+query(question)
 # 测试新增的外部服务调用
-print("\n===== 测试外部服务调用 =====")
-external_question = "从外部服务获取一些用户数据，然后告诉我第一个用户的名字和邮箱是什么？"
-query(external_question)
+# print("\n===== 测试外部服务调用 =====")
+# external_question = "从外部服务获取一些用户数据，然后告诉我第一个用户的名字和邮箱是什么？"
+# query(external_question)
 
-print("\n===== 测试复杂外部服务查询 =====")
-complex_question = "获取外部服务中的帖子数据，然后计算一下返回了多少条帖子？"
-query(complex_question)
+# print("\n===== 测试复杂外部服务查询 =====")
+# complex_question = "获取外部服务中的帖子数据，然后计算一下返回了多少条帖子？"
+# query(complex_question)

@@ -46,7 +46,7 @@ class ModelEvaluator:
         print("加载原始模型...")
         model = AutoModelForCausalLM.from_pretrained(
             self.original_model_path, 
-            torch_dtype=torch.float16, 
+            torch_dtype=torch.bfloat16, 
             trust_remote_code=True
         )
         model = model.to(self.device)
@@ -59,7 +59,7 @@ class ModelEvaluator:
         # 直接加载已合并的完整模型
         model = AutoModelForCausalLM.from_pretrained(
             self.lora_model_path, 
-            torch_dtype=torch.float16, 
+            torch_dtype=torch.bfloat16, 
             trust_remote_code=True
         )
         model = model.to(self.device)
@@ -393,7 +393,7 @@ class ModelEvaluator:
 def main():
     # 配置路径
     original_model_path = "./modelscope/Qwen/Qwen2.5-1.5B-Instruct"
-    lora_model_path = "./lora_output"  # 已合并的LoRA模型路径
+    lora_model_path = "./lora_output_bf16"  # 已合并的LoRA模型路径
     test_data_path = "./data/test_lite_plus.json"
     
     # 创建评估器

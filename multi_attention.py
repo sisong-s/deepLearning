@@ -11,6 +11,9 @@ class SimplifiedMultiHeadAttention(nn.Module):
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
         
         # 关键参数
+        # d_model：d 代表 dimension（维度），model 指模型，合起来表示模型的特征维度
+        # n_heads：n 代表 number（数量），heads 指注意力头，合起来表示多头注意力机制中 “头” 的数量
+        # d_k：d 仍指 dimension，k 来自注意力机制中的 key（键），这里表示单个注意力头的特征维度
         self.d_model = d_model  # 输入/输出维度（如 512）
         self.n_heads = n_heads  # 注意力头数量（如 8）
         self.d_k = d_model // n_heads  # 单个头的维度（如 512/8=64）
