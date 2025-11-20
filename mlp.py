@@ -60,6 +60,7 @@ for epoch in range(5):
 
 # 5. 测试准确率
 # 切换模型运行模式,只影响 Dropout 和 BatchNorm 层,省显存 / 提速？几乎不省
+# 在这个mlp里没有用
 model.eval()
 correct = 0
 total = 0

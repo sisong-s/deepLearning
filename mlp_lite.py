@@ -19,3 +19,14 @@ model = MLP()
 x = torch.randn(32, 100)   # 假数据：32个样本，每个100维
 output = model(x)
 print(output.shape)  # torch.Size([32, 10])
+
+# criterion = nn.MSELoss()
+# optimizer = optim.SGD(model.parameters(), lr=0.01)   # SGD 也能收敛得很清楚
+
+# # 3. 训练 500 次（数据极少，几百次就完全收敛）
+# for epoch in range(501):
+#     optimizer.zero_grad()
+#     pred = model(X)
+#     loss = criterion(pred, Y)
+#     loss.backward()
+#     optimizer.step()
