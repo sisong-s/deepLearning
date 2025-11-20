@@ -59,9 +59,11 @@ for epoch in range(5):
     print(f"Epoch {epoch+1}/5, Loss: {total_loss/len(train_loader):.4f}")
 
 # 5. 测试准确率
+# 切换模型运行模式,只影响 Dropout 和 BatchNorm 层,省显存 / 提速？几乎不省
 model.eval()
 correct = 0
 total = 0
+# 关闭梯度计算，省显存+加速,影响整个网络的所有参数,大幅省显存、提速 30%~50%
 with torch.no_grad():
     for images, labels in test_loader:
         images = images.to(device)
