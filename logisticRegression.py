@@ -20,7 +20,7 @@ class LogisticRegression:
         for _ in range(self.epochs):
             for xi, yi in zip(X, y):
                 p = self.forward(xi)
-                target = 1 if yi ==-1 else 0
+                target = 0 if yi ==-1 else 1
                 error = p - target
                 self.b -= self.lr * error
                 for i in range(self.dim):
