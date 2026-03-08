@@ -1,7 +1,9 @@
 """
-Wide&Deep模型训练模块 (PyTorch实现 - 联合训练)
+Wide&Deep模型训练模块 (PyTorch实现 - 联合训练, 隐式反馈版本)
 Wide部分: 线性层 (类似逻辑回归)
 Deep部分: DNN (深度神经网络)
+训练: BCE损失 + 负采样 (每正例采样4个负例)
+输出: Sigmoid 概率 (0-1)
 """
 
 import os
@@ -19,19 +21,18 @@ class WideAndDeepModel(nn.Module):
     必须使用 UserID 和 MovieID 的 Embedding
     """
     
-    def __init__(self, input_dim, hidden_units=[64, 32], 
-                 num_users=6041, num_movies=3953, 
+    def __init__(self, input_dim, hidden_units=[64, 32],
+                 num_users=6041, num_movies=3953,
                  num_ages=7, num_occupations=21, num_movie_years=82, num_rate_years=10,
-                 user_emb_dim=32, movie_emb_dim=32, age_emb_dim=8, 
+                 user_emb_dim=32, movie_emb_dim=32, age_emb_dim=8,
                  occupation_emb_dim=16, movie_year_emb_dim=8, rate_year_emb_dim=4,
-                 num_stat_features=6, dropout_rate=0.3, wide_l2_reg=0.01):
+                 num_stat_features=2, dropout_rate=0.3, wide_l2_reg=0.01):
         """
-        初始化Wide&Deep模型
-        
+        初始化Wide&Deep模型 (隐式反馈版本)
+
         Args:
-            input_dim: 输入特征维度 (13列: UserID, MovieID, Gender, Age, Occupation, MoiveYear, RateYear, 
-                      user_rating_mean, user_rating_std, user_rating_count,
-                      movie_rating_mean, movie_rating_std, movie_rating_count)
+            input_dim: 输入特征维度 (9列: UserID, MovieID, Gender, Age, Occupation,
+                      MoiveYear, RateYear, user_interact_count, movie_interact_count)
             hidden_units: DNN隐藏层单元数列表 (默认[64, 32])
             num_users: 用户总数
             num_movies: 电影总数
@@ -45,13 +46,14 @@ class WideAndDeepModel(nn.Module):
             occupation_emb_dim: Occupation Embedding维度 (默认16)
             movie_year_emb_dim: MovieYear Embedding维度 (默认8)
             rate_year_emb_dim: RateYear Embedding维度 (默认4)
-            num_stat_features: 统计特征数量 (默认6: 用户3个+电影3个)
+            num_stat_features: 统计特征数量 (默认2: user_interact_count + movie_interact_count)
             dropout_rate: Dropout比率 (默认0.3)
             wide_l2_reg: Wide侧L2正则化系数 (默认0.01)
         """
         super(WideAndDeepModel, self).__init__()
         
-        self.input_dim = input_dim
+        self.input_dim    = input_dim
+        self.hidden_units = hidden_units
         self.num_users = num_users
         self.num_movies = num_movies
         self.num_ages = num_ages
@@ -103,28 +105,19 @@ class WideAndDeepModel(nn.Module):
         deep_feature_dim = (user_emb_dim + movie_emb_dim + age_emb_dim + 
                            occupation_emb_dim + movie_year_emb_dim + rate_year_emb_dim + 1 + num_stat_features)
         
-        print(f"== Wide&Deep 模型特征分配 ===")
+        print(f"== Wide&Deep 模型特征分配 (隐式反馈版本) ===")
         print(f"Wide部分: 逻辑回归 + 统计特征线性层 + 特征交叉")
-        print(f"  - UserID Embedding({num_users}+1, 1)  [最大索引:{num_users}]")
-        print(f"  - MovieID Embedding({num_movies}+1, 1)  [最大索引:{num_movies}]")
-        print(f"  - Gender Embedding(2, 1)")
-        print(f"  - Age Embedding({num_ages}+1, 1)")
-        print(f"  - Occupation Embedding({num_occupations}+1, 1)")
-        print(f"  - MovieYear Embedding({num_movie_years}+1, 1)")
-        print(f"  - RateYear Embedding({num_rate_years}+1, 1)")
-        print(f"  - 统计特征线性层: Linear({num_stat_features}, 1)")
+        print(f"  - UserID Embedding({num_users}+1, 1)")
+        print(f"  - MovieID Embedding({num_movies}+1, 1)")
+        print(f"  - Gender/Age/Occupation/MovieYear/RateYear Embedding")
+        print(f"  - 统计特征线性层: Linear({num_stat_features}, 1)  [user_interact_count, movie_interact_count]")
         print(f"  - 特征交叉 (Age × MovieYear): Embedding({(num_ages+1)*(num_movie_years+1)}, 1)")
-        print(f"  → 数学上等价于 one-hot + 线性权重 + 统计特征权重 + 交叉特征权重")
         print(f"Deep部分特征维度: {deep_feature_dim}")
-        print(f"  - UserID Embedding: {user_emb_dim}维 (最大索引:{num_users})")
-        print(f"  - MovieID Embedding: {movie_emb_dim}维 (最大索引:{num_movies})")
-        print(f"  - Age Embedding: {age_emb_dim}维 ({num_ages}个年龄段)")
-        print(f"  - Occupation Embedding: {occupation_emb_dim}维 ({num_occupations}个职业)")
-        print(f"  - MovieYear Embedding: {movie_year_emb_dim}维 ({num_movie_years}个年份)")
-        print(f"  - RateYear Embedding: {rate_year_emb_dim}维 ({num_rate_years}个年份)")
-        print(f"  - Gender: 1维 (数值特征)")
-        print(f"  - 统计特征: {num_stat_features}维 (用户3个+电影3个)")
-        print(f"  - Dropout率: {dropout_rate}")
+        print(f"  - UserID Embedding: {user_emb_dim}d | MovieID: {movie_emb_dim}d")
+        print(f"  - Age: {age_emb_dim}d | Occupation: {occupation_emb_dim}d")
+        print(f"  - MovieYear: {movie_year_emb_dim}d | RateYear: {rate_year_emb_dim}d")
+        print(f"  - Gender: 1d | 统计特征: {num_stat_features}d | Dropout: {dropout_rate}")
+        print(f"输出: Sigmoid 概率 [0, 1]")
         print(f"Wide侧L2正则化: {wide_l2_reg}")
         print(f"=============================")
         
@@ -144,28 +137,28 @@ class WideAndDeepModel(nn.Module):
     def forward(self, x):
         """
         前向传播
-        
+
         Args:
-            x: 输入特征 (batch_size, 13)
-               列索引: [0]UserID, [1]MovieID, [2]Gender, [3]Age, [4]Occupation, [5]MoiveYear, [6]RateYear,
-                      [7]user_rating_mean, [8]user_rating_std, [9]user_rating_count,
-                      [10]movie_rating_mean, [11]movie_rating_std, [12]movie_rating_count
-        
+            x: 输入特征 (batch_size, 9)
+               列索引: [0]UserID, [1]MovieID, [2]Gender, [3]Age, [4]Occupation,
+                      [5]MoiveYear, [6]RateYear,
+                      [7]user_interact_count, [8]movie_interact_count
+
         Returns:
-            predictions: Wide和Deep的联合输出 (batch_size,) - 回归预测值
+            predictions: Sigmoid概率 (batch_size,) - 范围 [0, 1]
         """
         # 提取各个特征 (注意转为long类型用于Embedding索引)
-        user_ids = x[:, 0].long()
-        movie_ids = x[:, 1].long()
-        gender_ids = x[:, 2].long()  # Gender作为类别索引
-        gender = x[:, 2:3]  # 保持2D形状用于Deep部分 (batch_size, 1)
-        age_ids = x[:, 3].long()
+        user_ids       = x[:, 0].long()
+        movie_ids      = x[:, 1].long()
+        gender_ids     = x[:, 2].long()  # Gender作为类别索引
+        gender         = x[:, 2:3]       # 保持2D形状用于Deep部分 (batch_size, 1)
+        age_ids        = x[:, 3].long()
         occupation_ids = x[:, 4].long()
         movie_year_ids = x[:, 5].long()
-        rate_year_ids = x[:, 6].long()
-        
-        # 统计特征 (数值特征)
-        stat_features = x[:, 7:13]  # (batch_size, 6)
+        rate_year_ids  = x[:, 6].long()
+
+        # 统计特征 (数值特征: user_interact_count, movie_interact_count)
+        stat_features = x[:, 7:9]  # (batch_size, 2)
         
         # Deep部分: 获取所有Embedding
         user_emb = self.user_embedding(user_ids)  # (batch_size, user_emb_dim)
@@ -203,9 +196,9 @@ class WideAndDeepModel(nn.Module):
         
         # 联合输出 (Wide和Deep权重平衡)
         output = wide_out * 0.5 + deep_out * 0.5
-        
-        # 返回一维张量 (batch_size,)
-        return output.squeeze()
+
+        # Sigmoid: 将输出转换为 [0, 1] 概率
+        return torch.sigmoid(output.squeeze())
     
     def get_wide_l2_loss(self):
         """
@@ -241,128 +234,159 @@ class WideAndDeepModel(nn.Module):
     
     def fit(self, X_train, y_train, X_val=None, y_val=None,
             epochs=10, batch_size=512, learning_rate=0.001, verbose=True,
-            early_stopping_patience=5, early_stopping_min_delta=0.0001):
+            early_stopping_patience=5, early_stopping_min_delta=0.0001,
+            neg_sample_ratio=4, all_movie_ids=None):
         """
-        训练Wide&Deep模型 (联合训练)
-        
+        训练Wide&Deep模型 (隐式反馈 + 负采样 + BCE损失)
+
         Args:
-            X_train: 训练特征 (numpy array)
-            y_train: 训练标签 (评分值 1-5) (numpy array)
-            X_val: 验证特征 (可选)
+            X_train: 训练特征 (numpy array, 全为正例)
+            y_train: 训练标签 (全为1, 占位用)
+            X_val: 验证特征 (可选, 全为正例)
             y_val: 验证标签 (可选)
             epochs: 训练轮数
-            batch_size: 批次大小
+            batch_size: 批次大小 (正例batch大小, 实际batch含负例)
             learning_rate: 学习率
             verbose: 是否显示训练详情
-            early_stopping_patience: Early Stopping耐心值 (默认5,设为0禁用)
+            early_stopping_patience: Early Stopping耐心值 (默认5, 设为0禁用)
             early_stopping_min_delta: Early Stopping最小改善阈值 (默认0.0001)
+            neg_sample_ratio: 每个正例采样的负例数量 (默认4)
+            all_movie_ids: 所有电影ID列表 (用于负采样), 若为None则从训练集提取
         """
-        print("训练Wide&Deep模型 (联合训练)...")
-        print(f"  损失函数: RMSE (Root Mean Squared Error)")
+        print("训练Wide&Deep模型 (隐式反馈 + 负采样 + BCE)...")
+        print(f"  损失函数: Binary Cross Entropy (BCE)")
+        print(f"  负采样比例: 1 正 : {neg_sample_ratio} 负")
         print(f"  使用设备: {'GPU' if torch.cuda.is_available() else 'CPU'}")
         if early_stopping_patience > 0 and X_val is not None:
-            print(f"  Early Stopping: 启用 (patience={early_stopping_patience}, min_delta={early_stopping_min_delta})")
+            print(f"  Early Stopping: 启用 (patience={early_stopping_patience}, "
+                  f"min_delta={early_stopping_min_delta})")
         else:
             print(f"  Early Stopping: 禁用")
-        
+
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.to(device)
-        # 转换为PyTorch张量 (回归任务使用FloatTensor)
+
+        # 构建负采样所需的数据结构
+        # X_train 中: [0]=UserID, [1]=MovieID
+        train_user_ids  = X_train[:, 0].astype(int)
+        train_movie_ids = X_train[:, 1].astype(int)
+
+        # 每个用户已交互的电影集合
+        user_pos_set = {}
+        for uid, mid in zip(train_user_ids, train_movie_ids):
+            if uid not in user_pos_set:
+                user_pos_set[uid] = set()
+            user_pos_set[uid].add(mid)
+
+        # 候选电影池
+        if all_movie_ids is None:
+            all_movie_arr = np.array(sorted(set(train_movie_ids)))
+        else:
+            all_movie_arr = np.array(sorted(all_movie_ids))
+
+        # 正例 DataLoader
         X_train_tensor = torch.FloatTensor(X_train)
-        y_train_tensor = torch.FloatTensor(y_train)
-        
-        # 创建数据加载器
-        train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        
-        # 验证集
+        train_dataset  = TensorDataset(X_train_tensor, torch.arange(len(X_train)))
+        train_loader   = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+        # 验证集 (正例 + 负例各一批, 用于监控 BCE)
         val_loader = None
         if X_val is not None and y_val is not None:
             X_val_tensor = torch.FloatTensor(X_val)
-            y_val_tensor = torch.FloatTensor(y_val)
-            val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
-            val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        
-        # 损失函数和优化器 - 使用MSE损失(其平方根即RMSE)
-        criterion = nn.MSELoss()
+            y_val_tensor = torch.ones(len(X_val), dtype=torch.float32)
+            val_dataset  = TensorDataset(X_val_tensor, y_val_tensor)
+            val_loader   = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+        criterion = nn.BCELoss()
         optimizer = optim.Adam(self.parameters(), lr=learning_rate)
-        
-        # Early Stopping变量
-        best_val_rmse = float('inf')
+
+        best_val_loss    = float('inf')
         patience_counter = 0
         best_model_state = None
-        
-        # 训练循环
+        rng = np.random.default_rng(0)
+
         for epoch in range(epochs):
             self.train()
-            train_mse_loss = 0.0
-            train_total = 0
-            
-            for batch_X, batch_y in train_loader:
-                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-                
-                # 前向传播
+            train_bce_loss = 0.0
+            train_total    = 0
+
+            for batch_X, batch_idx in train_loader:
+                batch_idx_np = batch_idx.numpy()
+                batch_X_np   = batch_X.numpy()
+
+                # --- 动态负采样 ---
+                neg_rows = []
+                for i, idx in enumerate(batch_idx_np):
+                    uid    = int(batch_X_np[i, 0])
+                    pos_set = user_pos_set.get(uid, set())
+                    # 从候选池中随机采样, 过滤已交互
+                    candidates = all_movie_arr[~np.isin(all_movie_arr, list(pos_set))]
+                    if len(candidates) == 0:
+                        candidates = all_movie_arr
+                    sampled = rng.choice(candidates,
+                                         size=neg_sample_ratio,
+                                         replace=len(candidates) < neg_sample_ratio)
+                    for neg_mid in sampled:
+                        neg_row        = batch_X_np[i].copy()
+                        neg_row[1]     = neg_mid   # 替换 MovieID
+                        neg_rows.append(neg_row)
+
+                neg_X  = torch.FloatTensor(np.array(neg_rows))
+                neg_y  = torch.zeros(len(neg_rows), dtype=torch.float32)
+                pos_y  = torch.ones(len(batch_X),   dtype=torch.float32)
+
+                # 拼接正负例
+                combined_X = torch.cat([batch_X, neg_X], dim=0).to(device)
+                combined_y = torch.cat([pos_y,   neg_y], dim=0).to(device)
+
                 optimizer.zero_grad()
-                outputs = self(batch_X)
-                mse_loss = criterion(outputs, batch_y)
-                
-                # 添加Wide侧L2正则化损失
-                l2_loss = self.get_wide_l2_loss()
-                loss = mse_loss + l2_loss
-                
-                # 反向传播
+                outputs  = self(combined_X)
+                bce_loss = criterion(outputs, combined_y)
+                l2_loss  = self.get_wide_l2_loss()
+                loss     = bce_loss + l2_loss
+
                 loss.backward()
                 optimizer.step()
-                
-                # 统计 (使用MSE损失进行统计,不包含L2正则项)
-                train_mse_loss += mse_loss.item() * batch_X.size(0)
-                train_total += batch_X.size(0)
-            
-            # 计算RMSE
-            train_mse = train_mse_loss / train_total
-            train_rmse = np.sqrt(train_mse)
-            
+
+                train_bce_loss += bce_loss.item() * len(combined_X)
+                train_total    += len(combined_X)
+
+            train_avg_loss = train_bce_loss / train_total
+
             # 验证
             if val_loader is not None:
                 self.eval()
-                val_mse_loss = 0.0
-                val_total = 0
-                
+                val_bce_loss = 0.0
+                val_total    = 0
+
                 with torch.no_grad():
                     for batch_X, batch_y in val_loader:
                         batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-                        outputs = self(batch_X)
-                        loss = criterion(outputs, batch_y)
-                        
-                        val_mse_loss += loss.item() * batch_X.size(0)
-                        val_total += batch_X.size(0)
-                
-                val_mse = val_mse_loss / val_total
-                val_rmse = np.sqrt(val_mse)
-                
+                        outputs  = self(batch_X)
+                        loss     = criterion(outputs, batch_y)
+                        val_bce_loss += loss.item() * len(batch_X)
+                        val_total    += len(batch_X)
+
+                val_avg_loss = val_bce_loss / val_total
+
                 if verbose:
                     print(f"  Epoch [{epoch+1}/{epochs}] "
-                          f"Train RMSE: {train_rmse:.4f} | "
-                          f"Val RMSE: {val_rmse:.4f}", end="")
-                
-                # Early Stopping检查
+                          f"Train BCE: {train_avg_loss:.4f} | "
+                          f"Val BCE: {val_avg_loss:.4f}", end="")
+
                 if early_stopping_patience > 0:
-                    # 检查是否有改善
-                    if val_rmse < best_val_rmse - early_stopping_min_delta:
-                        best_val_rmse = val_rmse
+                    if val_avg_loss < best_val_loss - early_stopping_min_delta:
+                        best_val_loss    = val_avg_loss
                         patience_counter = 0
-                        best_model_state = self.state_dict().copy()
+                        best_model_state = {k: v.clone() for k, v in self.state_dict().items()}
                         if verbose:
                             print(" ✓ [Best]")
                     else:
                         patience_counter += 1
                         if verbose:
                             print(f" (patience: {patience_counter}/{early_stopping_patience})")
-                        
-                        # 达到耐心值,停止训练
                         if patience_counter >= early_stopping_patience:
-                            print(f"  Early Stopping触发! 最佳Val RMSE: {best_val_rmse:.4f}")
-                            # 恢复最佳模型
+                            print(f"  Early Stopping触发! 最佳Val BCE: {best_val_loss:.4f}")
                             self.load_state_dict(best_model_state)
                             break
                 else:
@@ -370,14 +394,12 @@ class WideAndDeepModel(nn.Module):
                         print()
             else:
                 if verbose:
-                    print(f"  Epoch [{epoch+1}/{epochs}] "
-                          f"Train RMSE: {train_rmse:.4f}")
-        
-        # 如果启用了Early Stopping但未触发,恢复最佳模型
+                    print(f"  Epoch [{epoch+1}/{epochs}] Train BCE: {train_avg_loss:.4f}")
+
         if early_stopping_patience > 0 and val_loader is not None and best_model_state is not None:
             self.load_state_dict(best_model_state)
-            print(f"  训练完成,使用最佳模型 (Val RMSE: {best_val_rmse:.4f})")
-        
+            print(f"  训练完成,使用最佳模型 (Val BCE: {best_val_loss:.4f})")
+
         print("Wide&Deep模型训练完成")
     
     def predict(self, X):
@@ -413,6 +435,7 @@ class WideAndDeepModel(nn.Module):
         checkpoint = {
             'model_state_dict': self.state_dict(),
             'input_dim': self.input_dim,
+            'hidden_units': self.hidden_units,
             'num_users': self.num_users,
             'num_movies': self.num_movies,
             'num_ages': self.num_ages,
@@ -432,12 +455,12 @@ class WideAndDeepModel(nn.Module):
         print(f"  Wide&Deep模型已保存至: {filepath}")
     
     @staticmethod
-    def load(filepath='models/wide_deep_model.pth', hidden_units=[64, 32], 
-             num_users=6041, num_movies=3953, 
+    def load(filepath='models/wide_deep_model.pth', hidden_units=[64, 32],
+             num_users=6041, num_movies=3953,
              num_ages=7, num_occupations=21, num_movie_years=82, num_rate_years=10,
              user_emb_dim=32, movie_emb_dim=32, age_emb_dim=8,
              occupation_emb_dim=16, movie_year_emb_dim=8, rate_year_emb_dim=4,
-             num_stat_features=6, dropout_rate=0.3, wide_l2_reg=0.01):
+             num_stat_features=2, dropout_rate=0.3, wide_l2_reg=0.01):
         """
         加载模型
         
@@ -472,7 +495,7 @@ class WideAndDeepModel(nn.Module):
         # 创建模型实例 (优先使用保存的配置)
         model = WideAndDeepModel(
             input_dim=checkpoint['input_dim'],
-            hidden_units=hidden_units,
+            hidden_units=checkpoint.get('hidden_units', hidden_units),
             num_users=checkpoint.get('num_users', num_users),
             num_movies=checkpoint.get('num_movies', num_movies),
             num_ages=checkpoint.get('num_ages', num_ages),
@@ -498,26 +521,26 @@ class WideAndDeepModel(nn.Module):
 
 
 def train_wide_deep_model(X_train, y_train, X_val=None, y_val=None,
-                          hidden_units=[64, 32], epochs=10, batch_size=512, 
+                          hidden_units=[64, 32], epochs=10, batch_size=512,
                           learning_rate=0.001, verbose=True,
                           num_users=6041, num_movies=3953,
-                          num_ages=7, num_occupations=21, 
+                          num_ages=7, num_occupations=21,
                           num_movie_years=82, num_rate_years=10,
-                          num_stat_features=6, dropout_rate=0.3, wide_l2_reg=0.01,
-                          early_stopping_patience=5, early_stopping_min_delta=0.0001):
+                          num_stat_features=2, dropout_rate=0.3, wide_l2_reg=0.01,
+                          early_stopping_patience=5, early_stopping_min_delta=0.0001,
+                          neg_sample_ratio=4, all_movie_ids=None):
     """
-    训练Wide&Deep模型
-    
+    训练Wide&Deep模型 (隐式反馈 + 负采样 + BCE)
+
     Args:
-        X_train: 训练特征 (13列: UserID, MovieID, Gender, Age, Occupation, MoiveYear, RateYear,
-                user_rating_mean, user_rating_std, user_rating_count,
-                movie_rating_mean, movie_rating_std, movie_rating_count)
-        y_train: 训练标签 (评分值 1-5)
+        X_train: 训练特征 (9列: UserID, MovieID, Gender, Age, Occupation, MoiveYear, RateYear,
+                user_interact_count, movie_interact_count), 全为正例
+        y_train: 训练标签 (全为1, 负例在训练中动态采样)
         X_val: 验证特征 (可选)
         y_val: 验证标签 (可选)
         hidden_units: DNN隐藏层单元数 (默认[64, 32])
         epochs: 训练轮数
-        batch_size: 批次大小
+        batch_size: 批次大小 (正例batch大小)
         learning_rate: 学习率
         verbose: 是否显示训练详情
         num_users: 用户总数
@@ -526,34 +549,27 @@ def train_wide_deep_model(X_train, y_train, X_val=None, y_val=None,
         num_occupations: 职业数量
         num_movie_years: 电影年份数量
         num_rate_years: 评分年份数量
-        num_stat_features: 统计特征数量
+        num_stat_features: 统计特征数量 (默认2)
         dropout_rate: Dropout比率
         wide_l2_reg: Wide侧L2正则化系数
-        early_stopping_patience: Early Stopping耐心值 (默认5,设为0禁用)
-        early_stopping_min_delta: Early Stopping最小改善阈值 (默认0.0001)
-    
+        early_stopping_patience: Early Stopping耐心值
+        early_stopping_min_delta: Early Stopping最小改善阈值
+        neg_sample_ratio: 每正例负例数 (默认4)
+        all_movie_ids: 全量电影ID列表 (用于负采样)
+
     Returns:
         WideAndDeepModel: 训练好的模型
     """
-    print("\n[4/5] 训练Wide&Deep模型...")
+    print("\n[4/5] 训练Wide&Deep模型 (隐式反馈)...")
     print(f"  Wide部分: 逻辑回归 + 统计特征线性层")
-    print(f"    - 包含 UserID 和 MovieID 的 one-hot 特征")
-    print(f"    - 统计特征: {num_stat_features}维 (用户3个+电影3个)")
+    print(f"    - 统计特征: {num_stat_features}维 (user_interact_count + movie_interact_count)")
     print(f"  Deep部分: DNN {hidden_units}")
-    print(f"    - UserID Embedding: 32维")
-    print(f"    - MovieID Embedding: 32维")
-    print(f"    - Age Embedding: 8维")
-    print(f"    - Occupation Embedding: 16维")
-    print(f"    - MovieYear Embedding: 8维")
-    print(f"    - RateYear Embedding: 4维")
-    print(f"    - Gender: 1维 (数值)")
-    print(f"    - 统计特征: {num_stat_features}维 (用户3个+电影3个)")
     print(f"  联合训练: Wide和Deep权重平衡 (0.5 + 0.5)")
-    print(f"  损失函数: RMSE (Root Mean Squared Error)")
-    
+    print(f"  损失函数: BCE | 负采样比: 1:{neg_sample_ratio}")
+
     input_dim = X_train.shape[1]
     model = WideAndDeepModel(
-        input_dim, 
+        input_dim,
         hidden_units=hidden_units,
         num_users=num_users,
         num_movies=num_movies,
@@ -565,7 +581,7 @@ def train_wide_deep_model(X_train, y_train, X_val=None, y_val=None,
         dropout_rate=dropout_rate,
         wide_l2_reg=wide_l2_reg
     )
-    
+
     model.fit(
         X_train, y_train,
         X_val, y_val,
@@ -574,21 +590,23 @@ def train_wide_deep_model(X_train, y_train, X_val=None, y_val=None,
         learning_rate=learning_rate,
         verbose=verbose,
         early_stopping_patience=early_stopping_patience,
-        early_stopping_min_delta=early_stopping_min_delta
+        early_stopping_min_delta=early_stopping_min_delta,
+        neg_sample_ratio=neg_sample_ratio,
+        all_movie_ids=all_movie_ids
     )
-    
+
     return model
 
 
 def predict(model, X):
     """
     使用Wide&Deep模型进行预测
-    
+
     Args:
         model: 训练好的Wide&Deep模型
         X: 特征矩阵
-    
+
     Returns:
-        array: 预测评分 (n_samples,)
+        array: 预测交互概率 (n_samples,), 范围 [0, 1]
     """
     return model.predict(X)

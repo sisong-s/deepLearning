@@ -81,3 +81,37 @@ def split_data_by_time(ratings, train_ratio=0.8, val_ratio=0.1):
     print(f"  Test:  {len(test_data):,} ({len(test_data)/n*100:.1f}%)")
     
     return train_data, val_data, test_data
+
+
+def split_data_by_user(ratings):
+    """
+    以用户为单位划分数据集（Leave-Last-2-Out策略）
+    每个用户按时间排序后，最后一条记录作为测试集，倒数第二条作为验证集，其余作为训练集。
+    
+    Args:
+        ratings: 评分数据DataFrame，需包含 UserID 和 Timestamp 列
+    
+    Returns:
+        tuple: (train_data, val_data, test_data)
+    """
+    print("\n[2/5] 以用户为单位划分数据集 (Leave-Last-2-Out)...")
+
+    # 按用户和时间排序，同一时间戳内保持稳定顺序
+    data_sorted = ratings.sort_values(['UserID', 'Timestamp']).reset_index(drop=True)
+
+    # 为每条记录计算其在该用户内的逆序排名（1=最后一条，2=倒数第二条，...）
+    data_sorted['_rank_from_last'] = (
+        data_sorted.groupby('UserID').cumcount(ascending=False) + 1
+    )
+
+    test_data  = data_sorted[data_sorted['_rank_from_last'] == 1].drop(columns='_rank_from_last').copy()
+    val_data   = data_sorted[data_sorted['_rank_from_last'] == 2].drop(columns='_rank_from_last').copy()
+    train_data = data_sorted[data_sorted['_rank_from_last'] >  2].drop(columns='_rank_from_last').copy()
+
+    n = len(data_sorted)
+    print(f"  Train: {len(train_data):,} ({len(train_data)/n*100:.1f}%)")
+    print(f"  Val:   {len(val_data):,} ({len(val_data)/n*100:.1f}%)")
+    print(f"  Test:  {len(test_data):,} ({len(test_data)/n*100:.1f}%)")
+
+    return train_data, val_data, test_data
+

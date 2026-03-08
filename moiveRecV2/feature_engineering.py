@@ -183,7 +183,7 @@ def augment_rating_data(train_data, target_distribution='uniform', augment_ratio
 
 def calculate_user_stats(train_data):
     """
-    计算用户行为统计特征
+    计算用户行为统计特征 (隐式反馈版本: 只统计交互次数)
     
     Args:
         train_data: 训练集DataFrame
@@ -191,21 +191,13 @@ def calculate_user_stats(train_data):
     Returns:
         DataFrame: 用户统计特征
     """
-    user_stats = train_data.groupby('UserID')['Rating'].agg([
-        ('user_rating_mean', 'mean'),      # 用户平均评分
-        ('user_rating_std', 'std'),        # 用户评分标准差
-        ('user_rating_count', 'count')     # 用户评分总数
-    ]).reset_index()
-    
-    # 填充标准差的NaN值(只有1次评分的用户)
-    user_stats['user_rating_std'] = user_stats['user_rating_std'].fillna(0)
-    
+    user_stats = train_data.groupby('UserID').size().reset_index(name='user_interact_count')
     return user_stats
 
 
 def calculate_movie_stats(train_data):
     """
-    计算电影热度特征
+    计算电影热度特征 (隐式反馈版本: 只统计交互次数)
     
     Args:
         train_data: 训练集DataFrame
@@ -213,294 +205,125 @@ def calculate_movie_stats(train_data):
     Returns:
         DataFrame: 电影统计特征
     """
-    movie_stats = train_data.groupby('MovieID')['Rating'].agg([
-        ('movie_rating_mean', 'mean'),     # 电影平均评分
-        ('movie_rating_std', 'std'),       # 电影评分标准差
-        ('movie_rating_count', 'count')    # 电影评分总数(热度)
-    ]).reset_index()
-    
-    # 填充标准差的NaN值(只有1次评分的电影)
-    movie_stats['movie_rating_std'] = movie_stats['movie_rating_std'].fillna(0)
-    
+    movie_stats = train_data.groupby('MovieID').size().reset_index(name='movie_interact_count')
     return movie_stats
 
 
-def prepare_features(train_data, val_data, test_data, users=None, movies=None, 
-                    apply_augmentation=False, augment_config=None):
+def prepare_features(train_data, val_data, test_data, users=None, movies=None,
+                     apply_augmentation=False, augment_config=None):
     """
-    准备训练、验证和测试集的特征
-    
+    准备训练、验证和测试集的特征 (隐式反馈版本)
+
+    标签: 1 表示用户对物品有过交互 (正例), 0 表示无交互 (负例, 由训练循环动态采样)
+    测试评估: Leave-Last-1-Out, 每个用户有 1 个正例 + 100 个随机负例候选
+
     Args:
-        train_data: 训练集DataFrame
-        val_data: 验证集DataFrame
-        test_data: 测试集DataFrame
-        users: 用户数据DataFrame (可选)
-        movies: 电影数据DataFrame (可选)
-        apply_augmentation: 是否应用数据增强
-        augment_config: 数据增强配置字典
-            - target_distribution: 'uniform' 或 'balanced'
-            - augment_ratio: 0.0-1.0
-    
+        train_data: 训练集 DataFrame
+        val_data: 验证集 DataFrame
+        test_data: 测试集 DataFrame
+        users: 用户数据 DataFrame (可选)
+        movies: 电影数据 DataFrame (可选)
+        apply_augmentation: 保留参数, 隐式反馈场景不使用
+        augment_config: 保留参数, 隐式反馈场景不使用
+
     Returns:
-        tuple: (X_train, y_train, X_val, y_val, X_test, y_test, feature_stats)
+        tuple: (X_train, y_train, X_val, y_val, X_test, y_test,
+                feature_stats, test_neg_samples)
+               test_neg_samples: dict {user_id -> list of 100 negative movie_ids}
     """
-    print("[3/5] 准备特征...")
-    
+    print("[3/5] 准备特征 (隐式反馈模式)...")
+
     # 预处理评分数据
     train_data = preprocess_ratings(train_data)
-    val_data = preprocess_ratings(val_data)
-    test_data = preprocess_ratings(test_data)
-    
-    # ===== 处理OOV (Out-Of-Vocabulary) 用户和电影 =====
-    # 获取训练集中的用户和电影ID集合
-    train_user_ids = set(train_data['UserID'].unique())
-    train_movie_ids = set(train_data['MovieID'].unique())
-    
-    # 统计OOV数量
-    val_oov_users = set(val_data['UserID'].unique()) - train_user_ids
-    val_oov_movies = set(val_data['MovieID'].unique()) - train_movie_ids
-    test_oov_users = set(test_data['UserID'].unique()) - train_user_ids
-    test_oov_movies = set(test_data['MovieID'].unique()) - train_movie_ids
-    
-    print(f"=== OOV (未见过的ID) 统计 ===")
-    print(f"  训练集: {len(train_user_ids)} 个用户, {len(train_movie_ids)} 部电影")
-    print(f"  验证集OOV: {len(val_oov_users)} 个新用户, {len(val_oov_movies)} 部新电影")
-    print(f"  测试集OOV: {len(test_oov_users)} 个新用户, {len(test_oov_movies)} 部新电影")
-    
-    # 定义UNK索引 (使用最大ID+1作为UNK索引)
-    # 注意:这里的UNK索引会在模型中对应一个可学习的embedding向量
-    max_user_id = train_data['UserID'].max()
-    max_movie_id = train_data['MovieID'].max()
-    UNK_USER_ID = max_user_id + 1
-    UNK_MOVIE_ID = max_movie_id + 1
-    
-    print(f"  UNK标记: UserID={UNK_USER_ID}, MovieID={UNK_MOVIE_ID}")
-    print(f"  ===========================")
-    
-    # === 验证集和测试集:先将OOV ID替换为UNK,再merge特征 ===
-    # 这样OOV样本会使用统一的UNK特征,而不是原始ID的特征
-    val_data.loc[~val_data['UserID'].isin(train_user_ids), 'UserID'] = UNK_USER_ID
-    val_data.loc[~val_data['MovieID'].isin(train_movie_ids), 'MovieID'] = UNK_MOVIE_ID
-    
-    test_data.loc[~test_data['UserID'].isin(train_user_ids), 'UserID'] = UNK_USER_ID
-    test_data.loc[~test_data['MovieID'].isin(train_movie_ids), 'MovieID'] = UNK_MOVIE_ID
-    
-    # === 计算用户行为统计特征和电影热度特征 ===
+    val_data   = preprocess_ratings(val_data)
+    test_data  = preprocess_ratings(test_data)
+
+    # ===== 构建全量交互集 (用于负采样) =====
+    all_movie_ids = set(
+        pd.concat([train_data['MovieID'], val_data['MovieID'], test_data['MovieID']]).unique()
+    )
+
+    # 每个用户在 train+val+test 中交互过的所有电影 (不应出现在负例中)
+    user_interacted = (
+        pd.concat([train_data[['UserID', 'MovieID']],
+                   val_data[['UserID', 'MovieID']],
+                   test_data[['UserID', 'MovieID']]])
+        .groupby('UserID')['MovieID']
+        .apply(set)
+        .to_dict()
+    )
+
+    # ===== 计算统计特征 (交互次数) =====
     print("=== 计算统计特征 ===")
-    
-    user_stats = calculate_user_stats(train_data)
+    user_stats  = calculate_user_stats(train_data)
     movie_stats = calculate_movie_stats(train_data)
-    
+
     print(f"  用户统计特征: {len(user_stats)} 个用户")
-    print(f"    - 平均评分均值: {user_stats['user_rating_mean'].mean():.3f}")
-    print(f"    - 平均评分数: {user_stats['user_rating_count'].mean():.1f}")
-    
+    print(f"    - 平均交互次数: {user_stats['user_interact_count'].mean():.1f}")
     print(f"  电影统计特征: {len(movie_stats)} 部电影")
-    print(f"    - 平均评分均值: {movie_stats['movie_rating_mean'].mean():.3f}")
-    print(f"    - 平均评分数: {movie_stats['movie_rating_count'].mean():.1f}")
-    print("======================")
-    
-    # === 数据增强:在特征合并之前进行(保证OOV处理的一致性) ===
-    if apply_augmentation:
-        if augment_config is None:
-            augment_config = {'target_distribution': 'uniform', 'augment_ratio': 0.5}
-        train_data = augment_rating_data(train_data, **augment_config)
-        
-        # 数据增强后重新计算统计特征
-        print("=== 数据增强后重新计算统计特征 ===")
-        user_stats = calculate_user_stats(train_data)
-        movie_stats = calculate_movie_stats(train_data)
-        print(f"  用户统计特征已更新: {len(user_stats)} 个用户")
-        print(f"  电影统计特征已更新: {len(movie_stats)} 部电影")
+    print(f"    - 平均交互次数: {movie_stats['movie_interact_count'].mean():.1f}")
     print("======================\n")
-    
-    # 如果提供了用户和电影数据,进行合并
+
+    # ===== 合并用户/电影侧特征 =====
     if users is not None and movies is not None:
-        users = preprocess_users(users)
+        users  = preprocess_users(users)
         movies = preprocess_movies(movies)
-        
-        # === 为UNK ID创建特征行 ===
-        # 创建UNK用户特征:使用训练集中所有用户特征的众数(最常见值)
-        unk_user_features = pd.DataFrame({
-            'UserID': [UNK_USER_ID],
-            'Gender': [users['Gender'].mode()[0]],  # 众数
-            'Age': [users['Age'].mode()[0]],
-            'Occupation': [users['Occupation'].mode()[0]]
-        })
-        
-        # 创建UNK电影特征:使用训练集中所有电影特征的众数
-        unk_movie_features = pd.DataFrame({
-            'MovieID': [UNK_MOVIE_ID],
-            'Title': ['Unknown'],
-            'MoiveYear': [movies['MoiveYear'].mode()[0]],  # 众数年份
-            'Genres': [movies['Genres'].mode()[0]]  # 众数类型
-        })
-        
-        # 将UNK特征添加到users和movies表中
-        users = pd.concat([users, unk_user_features], ignore_index=True)
-        movies = pd.concat([movies, unk_movie_features], ignore_index=True)
-        
-        print(f"  已为UNK ID创建特征行 (UserID={UNK_USER_ID}, MovieID={UNK_MOVIE_ID})")
-        
-        # 合并特征 (此时val/test中的OOV ID已经替换为UNK_USER_ID/UNK_MOVIE_ID)
-        train_data = train_data.merge(users, on='UserID', how='left')
-        train_data = train_data.merge(movies, on='MovieID', how='left')
-        
-        val_data = val_data.merge(users, on='UserID', how='left')
-        val_data = val_data.merge(movies, on='MovieID', how='left')
-        
-        test_data = test_data.merge(users, on='UserID', how='left')
-        test_data = test_data.merge(movies, on='MovieID', how='left')
-    
-    # === 合并统计特征 ===
-    # 为UNK用户和电影创建统计特征(使用全局平均值)
-    global_mean = user_stats['user_rating_mean'].mean()
-    global_std = user_stats['user_rating_std'].mean()
-    global_count_user = user_stats['user_rating_count'].mean()
-    
-    unk_user_stats = pd.DataFrame({
-        'UserID': [UNK_USER_ID],
-        'user_rating_mean': [global_mean],
-        'user_rating_std': [global_std],
-        'user_rating_count': [global_count_user]
-    })
-    
-    global_movie_mean = movie_stats['movie_rating_mean'].mean()
-    global_movie_std = movie_stats['movie_rating_std'].mean()
-    global_count_movie = movie_stats['movie_rating_count'].mean()
-    
-    unk_movie_stats = pd.DataFrame({
-        'MovieID': [UNK_MOVIE_ID],
-        'movie_rating_mean': [global_movie_mean],
-        'movie_rating_std': [global_movie_std],
-        'movie_rating_count': [global_count_movie]
-    })
-    
-    # 将UNK统计特征添加到统计表中
-    user_stats = pd.concat([user_stats, unk_user_stats], ignore_index=True)
-    movie_stats = pd.concat([movie_stats, unk_movie_stats], ignore_index=True)
-    
-    # 合并用户统计特征
-    train_data = train_data.merge(user_stats, on='UserID', how='left')
-    val_data = val_data.merge(user_stats, on='UserID', how='left')
-    test_data = test_data.merge(user_stats, on='UserID', how='left')
-    
-    # 合并电影统计特征
+
+        train_data = train_data.merge(users, on='UserID', how='left').merge(movies, on='MovieID', how='left')
+        val_data   = val_data.merge(users,   on='UserID', how='left').merge(movies, on='MovieID', how='left')
+        test_data  = test_data.merge(users,  on='UserID', how='left').merge(movies, on='MovieID', how='left')
+
+    # ===== 合并统计特征 =====
+    train_data = train_data.merge(user_stats,  on='UserID',  how='left')
+    val_data   = val_data.merge(user_stats,    on='UserID',  how='left')
+    test_data  = test_data.merge(user_stats,   on='UserID',  how='left')
+
     train_data = train_data.merge(movie_stats, on='MovieID', how='left')
-    val_data = val_data.merge(movie_stats, on='MovieID', how='left')
-    test_data = test_data.merge(movie_stats, on='MovieID', how='left')
-    
+    val_data   = val_data.merge(movie_stats,   on='MovieID', how='left')
+    test_data  = test_data.merge(movie_stats,  on='MovieID', how='left')
+
     print("  已合并用户行为统计特征和电影热度特征")
-    
-    # === 训练集:复制部分样本并将ID设为UNK,让模型学习UNK embedding ===
-    # 优点:保留原始训练数据,UNK embedding会学到"平均用户/电影"的表示
-    # 注意:需要在合并用户和电影特征之后进行,这样UNK样本才能包含完整特征
-    np.random.seed(42)
-    unk_ratio = 0.05  # 随机复制5%的样本用于UNK学习
-    
-    n_train = len(train_data)
-    
-    # 随机选择5%的样本,复制并将UserID设为UNK
-    unk_user_indices = np.random.choice(train_data.index, size=int(n_train * unk_ratio), replace=False)
-    unk_user_samples = train_data.loc[unk_user_indices].copy()
-    unk_user_samples['UserID'] = UNK_USER_ID
-    
-    # 随机选择5%的样本,复制并将MovieID设为UNK
-    unk_movie_indices = np.random.choice(train_data.index, size=int(n_train * unk_ratio), replace=False)
-    unk_movie_samples = train_data.loc[unk_movie_indices].copy()
-    unk_movie_samples['MovieID'] = UNK_MOVIE_ID
-    
-    # 将UNK样本追加到训练集
-    train_data = pd.concat([train_data, unk_user_samples, unk_movie_samples], ignore_index=True)
-    
-    print(f"  训练集UNK增强: 添加 {len(unk_user_samples)} 个UserID=UNK样本, {len(unk_movie_samples)} 个MovieID=UNK样本")
-    print(f"  增强后训练集大小: {len(train_data)} (原始: {n_train}, 增加: {len(unk_user_samples) + len(unk_movie_samples)})")
-    
-    # 合并所有数据以统一映射
+
+    # ===== 年份映射 =====
     all_data = pd.concat([train_data, val_data, test_data])
-    
-    # 创建年份映射 (MoiveYear和RateYear)
-    # MoiveYear: 将实际年份映射为索引
+
     movie_year_unique = sorted([y for y in all_data['MoiveYear'].dropna().unique()])
-    movie_year_map = {year: idx for idx, year in enumerate(movie_year_unique)}
-    
-    # RateYear: 将实际年份映射为索引  
-    rate_year_unique = sorted([y for y in all_data['RateYear'].dropna().unique()])
-    rate_year_map = {year: idx for idx, year in enumerate(rate_year_unique)}
-    
-    # 应用映射
-    train_data['MoiveYear'] = train_data['MoiveYear'].map(movie_year_map).fillna(0).astype(int)
-    train_data['RateYear'] = train_data['RateYear'].map(rate_year_map).fillna(0).astype(int)
-    
-    val_data['MoiveYear'] = val_data['MoiveYear'].map(movie_year_map).fillna(0).astype(int)
-    val_data['RateYear'] = val_data['RateYear'].map(rate_year_map).fillna(0).astype(int)
-    
-    test_data['MoiveYear'] = test_data['MoiveYear'].map(movie_year_map).fillna(0).astype(int)
-    test_data['RateYear'] = test_data['RateYear'].map(rate_year_map).fillna(0).astype(int)
-    
-    # === 归一化统计特征 ===
-    # 对std和count进行Min-Max归一化(0-1),不归一化mean
-    stats_cols = ['user_rating_std', 'user_rating_count',
-                  'movie_rating_std', 'movie_rating_count']
-    
+    movie_year_map    = {year: idx for idx, year in enumerate(movie_year_unique)}
+
+    rate_year_unique  = sorted([y for y in all_data['RateYear'].dropna().unique()])
+    rate_year_map     = {year: idx for idx, year in enumerate(rate_year_unique)}
+
+    for df in [train_data, val_data, test_data]:
+        df['MoiveYear'] = df['MoiveYear'].map(movie_year_map).fillna(0).astype(int)
+        df['RateYear']  = df['RateYear'].map(rate_year_map).fillna(0).astype(int)
+
+    # ===== 归一化统计特征 =====
+    stats_cols = ['user_interact_count', 'movie_interact_count']
     print(f"=== 归一化统计特征 ===")
-    normalization_stats = {}  # 保存归一化参数
-    
     for col in stats_cols:
-        # 使用训练集计算Min-Max归一化参数
         min_val = train_data[col].min()
         max_val = train_data[col].max()
-        
-        # 避免除以0
         if max_val == min_val:
-            # 如果最大值等于最小值，设置为0
-            train_data[col] = 0
-            val_data[col] = 0
-            test_data[col] = 0
+            for df in [train_data, val_data, test_data]:
+                df[col] = 0.0
         else:
-            # 保存归一化参数
-            normalization_stats[col] = {'min': min_val, 'max': max_val}
-            
-            # 应用Min-Max归一化: (x - min) / (max - min)
-            train_data[col] = (train_data[col] - min_val) / (max_val - min_val)
-            val_data[col] = (val_data[col] - min_val) / (max_val - min_val)
-            test_data[col] = (test_data[col] - min_val) / (max_val - min_val)
-            
-            # 将超出范围的值裁剪到[0, 1]
-            train_data[col] = train_data[col].clip(0, 1)
-            val_data[col] = val_data[col].clip(0, 1)
-            test_data[col] = test_data[col].clip(0, 1)
-            
-            print(f"  {col}: min={min_val:.3f}, max={max_val:.3f}")
-    
-    print(f"  统计特征已归一化 (Min-Max 0-1归一化, 不含mean字段)")
+            for df in [train_data, val_data, test_data]:
+                df[col] = ((df[col] - min_val) / (max_val - min_val)).clip(0, 1)
+            print(f"  {col}: min={min_val:.1f}, max={max_val:.1f}")
     print("========================")
-    
-    # 保存处理后的train_data、val_data、test_data到result文件夹
-    os.makedirs('result', exist_ok=True)
-    train_data.to_csv('result/train_data.csv', index=False, encoding='utf-8-sig')
-    val_data.to_csv('result/val_data.csv', index=False, encoding='utf-8-sig')
-    test_data.to_csv('result/test_data.csv', index=False, encoding='utf-8-sig')
-    print(f"  训练数据已保存到: result/train_data.csv")
-    print(f"  验证数据已保存到: result/val_data.csv")
-    print(f"  测试数据已保存到: result/test_data.csv")
-    # 选择特征列
+
+    # ===== 选择特征列 =====
     if users is not None and movies is not None:
-        # 使用丰富特征:用户特征 + 电影特征 + 时间特征 + 统计特征
-        feature_cols = ['UserID', 'MovieID', 'Gender', 'Age', 'Occupation', 
-                       'MoiveYear', 'RateYear',
-                       'user_rating_mean', 'user_rating_std', 'user_rating_count',
-                       'movie_rating_mean', 'movie_rating_std', 'movie_rating_count']
-        print(f"  使用特征: {', '.join(feature_cols)}")
+        feature_cols = ['UserID', 'MovieID', 'Gender', 'Age', 'Occupation',
+                        'MoiveYear', 'RateYear',
+                        'user_interact_count', 'movie_interact_count']
     else:
-        # 只使用ID特征 + 统计特征
         feature_cols = ['UserID', 'MovieID',
-                       'user_rating_mean', 'user_rating_std', 'user_rating_count',
-                       'movie_rating_mean', 'movie_rating_std', 'movie_rating_count']
-        print(f"  使用特征: {', '.join(feature_cols)}")
-    # 统计类别特征的唯一值数量
+                        'user_interact_count', 'movie_interact_count']
+    print(f"  使用特征: {', '.join(feature_cols)}")
+
+    # ===== 特征统计信息 =====
     feature_stats = {}
-    # 对每个特征统计唯一值 (使用映射后的数据)
     for col in feature_cols:
         if col == 'MoiveYear':
             unique_count = len(movie_year_map)
@@ -511,68 +334,69 @@ def prepare_features(train_data, val_data, test_data, users=None, movies=None,
             max_val = unique_count - 1
             min_val = 0
         elif col == 'UserID':
-            # 训练集已包含UNK样本,直接统计
             unique_values = train_data[col].dropna().unique()
-            unique_count = len(unique_values)  # 已包含UNK
-            max_val = int(unique_values.max())  # 已经是UNK_USER_ID
-            min_val = int(unique_values.min())
+            unique_count  = len(unique_values)
+            max_val       = int(unique_values.max())
+            min_val       = int(unique_values.min())
         elif col == 'MovieID':
-            # 训练集已包含UNK样本,直接统计
             unique_values = train_data[col].dropna().unique()
-            unique_count = len(unique_values)  # 已包含UNK
-            max_val = int(unique_values.max())  # 已经是UNK_MOVIE_ID
-            min_val = int(unique_values.min())
+            unique_count  = len(unique_values)
+            max_val       = int(unique_values.max())
+            min_val       = int(unique_values.min())
         else:
-            combined = pd.concat([train_data[col], val_data[col], test_data[col]])
+            combined      = pd.concat([train_data[col], val_data[col], test_data[col]])
             unique_values = combined.dropna().unique()
-            unique_count = len(unique_values)
-            max_val = int(unique_values.max())
-            min_val = int(unique_values.min())
-        feature_stats[col] = {
-            'num_unique': unique_count,
-            'max_value': max_val,
-            'min_value': min_val
-        }
+            unique_count  = len(unique_values)
+            max_val       = int(unique_values.max())
+            min_val       = int(unique_values.min())
+        feature_stats[col] = {'num_unique': unique_count, 'max_value': max_val, 'min_value': min_val}
+
     print("=== 特征统计信息 ===")
     for col, stats in feature_stats.items():
         print(f"  {col}: {stats['num_unique']} 个唯一值 (范围: {stats['min_value']}-{stats['max_value']})")
     print("  =====================")
-    X_train = train_data[feature_cols].values
-    y_train = train_data['Rating'].values
-    X_val = val_data[feature_cols].values
-    y_val = val_data['Rating'].values
-    X_test = test_data[feature_cols].values
-    y_test = test_data['Rating'].values
+
+    # ===== 构建 X/y =====
+    X_train = train_data[feature_cols].values.astype(np.float32)
+    y_train = np.ones(len(X_train), dtype=np.float32)   # 全部为正例 (负采样在训练中动态完成)
+
+    X_val   = val_data[feature_cols].values.astype(np.float32)
+    y_val   = np.ones(len(X_val), dtype=np.float32)
+
+    X_test  = test_data[feature_cols].values.astype(np.float32)
+    y_test  = np.ones(len(X_test), dtype=np.float32)
+
     print(f"特征维度: {X_train.shape[1]}")
-    print(f"  训练集样本数: {len(X_train):,}")
-    print(f"  验证集样本数: {len(X_val):,}")
-    print(f"  测试集样本数: {len(X_test):,}")
-    return X_train, y_train, X_val, y_val, X_test, y_test, feature_stats
+    print(f"  训练集正例数: {len(X_train):,}")
+    print(f"  验证集正例数: {len(X_val):,}")
+    print(f"  测试集正例数: {len(X_test):,}")
 
-def convert_to_classification(y_train, y_val, y_test):
+    # ===== 构建测试负采样候选池 (每个用户 100 个负例) =====
+    print("\n=== 构建测试负采样候选池 (每用户 100 个负例) ===")
+    rng = np.random.default_rng(42)
+    all_movie_list = sorted(all_movie_ids)
+    test_neg_samples = {}   # {user_id -> array of 100 negative movie_ids}
 
-    """
-    将评分从1-5映射到0-4,用于分类任务
-    Args:
-        y_train, y_val, y_test: 原始评分数组
-    Returns:
-        tuple: (y_train_class, y_val_class, y_test_class)
-    """
-    y_train_class = (y_train - 1).astype(int)
-    y_val_class = (y_val - 1).astype(int)
-    y_test_class = (y_test - 1).astype(int)
-    return y_train_class, y_val_class, y_test_class
+    for user_id in test_data['UserID'].unique():
+        interacted = user_interacted.get(user_id, set())
+        candidates = [m for m in all_movie_list if m not in interacted]
+        if len(candidates) >= 100:
+            neg_movies = rng.choice(candidates, size=100, replace=False).tolist()
+        else:
+            neg_movies = candidates  # 极少情况下不足100个
+        test_neg_samples[user_id] = neg_movies
 
-def proba_to_rating(y_proba):
-    """
-    将预测概率转换为期望评分
-    Args:
-        y_proba: 预测概率矩阵 (n_samples, 5)
-    Returns:
-        array: 期望评分 (概率加权)
-    """
-    # 计算期望评分 (概率加权)
-    # 例如: np.dot([0.1, 0.2, 0.3, 0.25, 0.15], [1, 2, 3, 4, 5])
-    #      = 0.1×1 + 0.2×2 + 0.3×3 + 0.25×4 + 0.15×5 = 3.15
-    return np.dot(y_proba, np.array([1, 2, 3, 4, 5]))
+    print(f"  已为 {len(test_neg_samples)} 个测试用户构建负例候选池")
+    print("  =====================")
+
+    # ===== 保存中间结果 =====
+    os.makedirs('result', exist_ok=True)
+    train_data.to_csv('result/train_data.csv', index=False, encoding='utf-8-sig')
+    val_data.to_csv('result/val_data.csv',     index=False, encoding='utf-8-sig')
+    test_data.to_csv('result/test_data.csv',   index=False, encoding='utf-8-sig')
+    print(f"  数据已保存到 result/ 目录")
+
+    return X_train, y_train, X_val, y_val, X_test, y_test, feature_stats, test_neg_samples
+
+
 
