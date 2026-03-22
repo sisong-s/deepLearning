@@ -1,43 +1,33 @@
-import math
-class LR:
-    def __init__(self, lr, epochs,dim):
+class Model:
+    def __init__(self,lr,epochs):
         self.lr = lr
-        self.dim = dim
-        self.w = [0.0]*dim
         self.epochs = epochs
+        self.w = 0.0
         self.b = 0.0
+    
+    def forward(self, x):
+        return self.w * x + self.b
 
-    def sigmoid(self,x):
-        return 1.0 / (1.0 + math.exp(x))
-
-    def forward(self,x):
-        z = self.b
-        for i in range(len(x)):
-            z += self.w[i] * x[i]
-        return self.sigmoid(z)
-
-    def fit(self,x,y):
-        for i in range(self.epochs):
-            for xi,yi in zip(x,y):
+    def fit(self, X, y):
+        for _ in range(self.epochs):
+            dw = 0.0
+            db = 0.0
+            for xi,yi in zip(X,y):
                 pred = self.forward(xi)
-                target = 0 if yi == -1 else 1
-                error = pred - target
-                self.b -= self.lr*error
-                for i in range(self.dim):
-                    self.w[i] -= self.lr*error*xi[i]
+                error = pred - yi
+                dw += error * xi
+                db += error
+            self.w -= self.lr*dw
+            self.b -= self.lr*db
 
-    def predict(self,x):
+    def predict(self, X):
         preds = []
-        for xi in x:
-            if(self.forward(xi)) >=0.5:
-                preds.append(1)
-            else:
-                preds.append(-1)
+        for xi in X:
+            preds.append(self.forward(xi))
         return preds
 
-if __name__ == '__main__' :
-    x = [[1,-1],[1,1],[-1,-1],[-1,1]]
-    y = [1,1,-1,-1]
-    lr = LR(lr=0.01, epochs=1000, dim=2)
-    lr.fit(x,y)
-    print(lr.predict(x))
+X = [1,2,3,4]
+y = [3.1,5.1,6.9,8.8]
+model = Model(0.001, 1000)
+model.fit(X,y)
+print(model.predict(X))
