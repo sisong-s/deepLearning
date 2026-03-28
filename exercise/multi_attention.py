@@ -66,7 +66,7 @@ class SimplifiedMultiHeadAttention(nn.Module):
         
         # 4. 合并多头：转置后reshape，恢复为 (batch, seq_q, d_model)]
         # .contiguous() 是一个用于调整张量内存布局的方法，其核心作用是确保张量在内存中是连续存储的。
-        attn_output = attn_output.transpose(1, 2).contiguous()  # 先转置：(batch, seq_q, n_heads, d_k)
+        attn_output = attn_output.transpose(1, 2)  # 先转置：(batch, seq_q, n_heads, d_k)
         attn_output = attn_output.reshape(attn_output.size(0), -1, self.d_model)  # 再合并：(batch, seq_q, d_model)
         
         # 5. 输出线性层：最终输出（维度与输入一致）
