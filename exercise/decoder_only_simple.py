@@ -8,17 +8,17 @@ import math
 
 
 class DecoderOnly(nn.Module):
-    def __init__(self, vocab_size, d_model, n_heads, d_ff, max_seq_len=512, padding_idx=0):
+    def __init__(self, vocab_size, d_model, n_heads, d_ff, seq_len, padding_idx):
         super().__init__()
-        assert d_model % n_heads == 0
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_k = d_model // n_heads
         self.padding_idx = padding_idx
+        self.seq_len = seq_len
 
         # 嵌入
         self.token_embed = nn.Embedding(vocab_size, d_model, padding_idx=padding_idx)
-        self.pos_embed   = nn.Embedding(max_seq_len, d_model)
+        self.pos_embed   = nn.Embedding(seq_len, d_model)
 
         # 因果自注意力
         self.w_q = nn.Linear(d_model, d_model)
@@ -44,8 +44,8 @@ class DecoderOnly(nn.Module):
     def split_heads(self, x):
         return x.reshape(x.size(0), -1, self.n_heads, self.d_k).transpose(1, 2)
 
-    def make_causal_mask(self, seq_len, device):
-        mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1).bool()
+    def make_causal_mask(self,seq_len):
+        mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
         return mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, seq_len)
 
     def make_padding_mask(self, token_ids):
@@ -59,17 +59,17 @@ class DecoderOnly(nn.Module):
 
     def forward(self, token_ids):
         B, T = token_ids.shape
-        positions = torch.arange(T, device=token_ids.device).unsqueeze(0)  # (1, T)
+        positions = torch.arange(T).unsqueeze(0)  # (1, T, d_model)
 
         # 词嵌入 + 位置嵌入
-        x = self.token_embed(token_ids) + self.pos_embed(positions)
+        x = self.token_embed(token_ids) + self.pos_embed(positions) # (B, T, d_model)
 
         # --- 因果自注意力子层 ---
         q = self.split_heads(self.w_q(x))
         k = self.split_heads(self.w_k(x))
         v = self.split_heads(self.w_v(x))
 
-        causal_mask = self.make_causal_mask(T, x.device)
+        causal_mask = self.make_causal_mask(T)
         pad_mask    = self.make_padding_mask(token_ids)
         mask = causal_mask | pad_mask
 
@@ -84,22 +84,16 @@ class DecoderOnly(nn.Module):
 
 
 if __name__ == "__main__":
-    VOCAB_SIZE  = 1000
-    D_MODEL     = 32
-    N_HEADS     = 4
-    D_FF        = 128
-    MAX_SEQ_LEN = 32
 
-    model = DecoderOnly(VOCAB_SIZE, D_MODEL, N_HEADS, D_FF, MAX_SEQ_LEN, padding_idx=0)
+    model =DecoderOnly(vocab_size=1000, d_model= 32, n_heads=4, d_ff =128,seq_len =5, padding_idx=0)
 
     # 模拟含 padding 的 batch
-    token_ids = torch.tensor([[1, 2, 3, 4, 5, 0, 0],
-                               [6, 7, 8, 0, 0, 0, 0]])
+    token_ids = torch.tensor([[1,2,3,0,0],[4,5,0,0,0]])
 
     logits, attn_weights = model(token_ids)
-    # torch.Size([2, 7, 1000])  batch seq vocab
+    # torch.Size([2, 5, 1000])  batch seq vocab
     print("logits shape:", logits.shape)
-    # torch.Size([2, 4, 7, 7])  batch n_heads seq_len seq_len
+    # torch.Size([2, 4, 5, 5])  batch n_heads seq_len seq_len
     print("attn_weights shape:", attn_weights.shape)
 
     # 验证因果掩码：上三角应全为 0
@@ -111,7 +105,7 @@ if __name__ == "__main__":
     input_ids  = token_ids[:, :-1]   # (2, 6)
     target_ids = token_ids[:, 1:]    # (2, 6)
     out, _ = model(input_ids)
-    loss = criterion(out.reshape(-1, VOCAB_SIZE), target_ids.reshape(-1))
+    loss = criterion(out.reshape(-1, 1000), target_ids.reshape(-1))
     print("\nloss:", loss.item())
 
 #### 2. `.detach()`
