@@ -5,7 +5,7 @@ def gd_sqrt(x):
     for _ in range(epochs):
         pred = w * w  # Current prediction of the square
         error = pred - x  # Difference from the actual value
-        dw = 4 * error * w  # Derivative of the loss with respect to w
+        dw = 2 * error * w  # Derivative of the loss with respect to w
         w -= lr * dw  # Update w using gradient descent
     return w
 
